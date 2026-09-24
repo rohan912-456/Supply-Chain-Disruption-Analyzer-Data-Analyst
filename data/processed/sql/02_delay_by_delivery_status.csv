@@ -1,0 +1,5 @@
+"DeliveryStatus","Order_Count","Avg_Delay_Days"
+"Late delivery","98977","1.6182"
+"Shipping canceled","7754","0.5727"
+"Shipping on time","32196","0.0000"
+"Advance shipping","41592","-1.5019"
