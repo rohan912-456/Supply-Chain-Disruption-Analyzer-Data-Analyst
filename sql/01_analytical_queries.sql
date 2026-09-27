@@ -1,48 +1,78 @@
-Query 1: Top 10 Regions/Suppliers by Delay Frequency
+-- Query 1: Top 10 Regions/Suppliers by Delay Frequency
 SELECT 
-    SUBSTRING_INDEX(OrderRegion, ',', 1) as Supplier_Region,
-    COUNT(*) as Total_Orders,
-    ROUND(AVG(DelayDays), 2) as Avg_Delay_Days,
-    COUNT(CASE WHEN DelayDays > 0 THEN 1 END) as Late_Orders,
-    ROUND((COUNT(CASE WHEN DelayDays > 0 THEN 1 END) / COUNT(*)) * 100, 1) as Late_Delivery_Percent
+    OrderRegion,
+    COUNT(*) AS Total_Orders,
+    AVG(DelayDays) AS Avg_Delay_Days
 FROM supply_chain_orders
-GROUP BY Supplier_Region
-HAVING Total_Orders > 100
+GROUP BY OrderRegion
 ORDER BY Avg_Delay_Days DESC
 LIMIT 10;
 
-Query 2: Average Delay by Shipping Mode (Delivery Status)
+-- Query 2: Delay Metrics by Delivery Status
 SELECT 
     DeliveryStatus,
-    COUNT(*) as Order_Count,
-    ROUND(AVG(DelayDays), 2) as Avg_Delay_Days,
-    MIN(DelayDays) as Min_Delay,
-    MAX(DelayDays) as Max_Delay,
-    ROUND(STDDEV(DelayDays), 2) as Std_Deviation
+    COUNT(*) AS Order_Count,
+    AVG(DelayDays) AS Avg_Delay_Days
 FROM supply_chain_orders
-WHERE DeliveryStatus IN ('Late delivery', 'Shipping on time', 'Advance shipping')
 GROUP BY DeliveryStatus
 ORDER BY Avg_Delay_Days DESC;
 
-Query 3: Products with Highest Damage/Loss Rate
+-- Query 3: Products with Highest Financial Loss Impact
 SELECT 
     ProductName,
-    COUNT(*) as Total_Orders,
-    ROUND(AVG(LossPercentage), 2) as Avg_Loss_Percent,
-    ROUND(SUM(CostImpactOfDelay), 2) as Total_Cost_Impact,
-    ROUND(SUM(CostImpactOfDelay) / SUM(OrderItemTotal) * 100, 2) as Impact_as_Percent_of_Sales
+    COUNT(*) AS Total_Orders,
+    AVG(LossPercentage) AS Avg_Loss_Percent,
+    SUM(CostImpactOfDelay) AS Total_Cost_Impact
 FROM supply_chain_orders
 GROUP BY ProductName
-HAVING Avg_Loss_Percent > 0
 ORDER BY Total_Cost_Impact DESC
 LIMIT 15;
 
-Query 4: Monthly Order Volume & Delay Trend
+-- Query 4: Monthly Order Volume & Delay Trends
 SELECT 
-    DATE_FORMAT(FormattedOrderDate, '%Y-%m-01') as Month,
-    COUNT(*) as Total_Orders,
-    ROUND(AVG(DelayDays), 2) as Avg_Delay_Days,
-    ROUND(SUM(CostImpactOfDelay), 0) as Monthly_Loss
+    YEAR(FormattedOrderDate) AS Order_Year,
+    MONTH(FormattedOrderDate) AS Order_Month,
+    COUNT(*) AS Total_Orders,
+    AVG(DelayDays) AS Avg_Delay_Days,
+    SUM(CostImpactOfDelay) AS Total_Loss
 FROM supply_chain_orders
-GROUP BY Month
-ORDER BY Month ASC;
+GROUP BY Order_Year, Order_Month
+ORDER BY Order_Year ASC, Order_Month ASC;
+
+-- Query 5: Supplier Risk Score Calculation
+SELECT 
+    OrderRegion AS Supplier_Region,
+    COUNT(*) AS Total_Orders,
+    AVG(DelayDays) AS Avg_Delay,
+    AVG(LateDeliveryRisk) * 100 AS Late_Risk_Percent,
+    AVG(LossPercentage) AS Avg_Loss_Percent,
+    (AVG(DelayDays) / 10) * 0.4 + AVG(LateDeliveryRisk) * 0.4 + (AVG(LossPercentage) / 100) * 0.2 AS Risk_Score
+FROM supply_chain_orders
+GROUP BY OrderRegion
+ORDER BY Risk_Score DESC;
+
+-- Query 6: On-Time Delivery % by Global Market
+SELECT 
+    Market,
+    COUNT(*) AS Total_Orders,
+    SUM(IF(DelayDays <= 0, 1, 0)) AS OnTime_Orders,
+    (SUM(IF(DelayDays <= 0, 1, 0)) / COUNT(*)) * 100 AS OnTime_Percent,
+    AVG(OrderItemTotal) AS Avg_Order_Value,
+    SUM(CostImpactOfDelay) AS Total_Delay_Cost
+FROM supply_chain_orders
+GROUP BY Market
+ORDER BY OnTime_Percent ASC;
+
+-- Query 7: High-Risk Supplier Drill-Down
+SELECT 
+    OrderRegion,
+    Market,
+    COUNT(*) AS Order_Count,
+    AVG(DelayDays) AS Avg_Delay,
+    AVG(LossPercentage) AS Avg_Loss_Percent,
+    SUM(OrderItemTotal) AS Total_Order_Value,
+    SUM(CostImpactOfDelay) AS Cost_Impact
+FROM supply_chain_orders
+GROUP BY OrderRegion, Market
+HAVING Avg_Delay > 0.5
+ORDER BY Avg_Delay DESC;

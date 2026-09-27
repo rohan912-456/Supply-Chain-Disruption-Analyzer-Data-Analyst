@@ -40,45 +40,50 @@ The project includes an interactive 3-page Power BI report.
 
 ### 📊 Phase 1: Excel
 **Data Profiling & Cleaning**<br>
-Audited 180,519 order records across 59 columns for data quality. Removed duplicates, fixed date formats, and standardized numeric fields. Pivot table analysis revealed the core problem: **57.3% late delivery rate** — nearly 4 times the industry standard of 15%.
+Analyzed the raw `DataCoSupplyChainDataset.csv` file using Excel. Audited 180,519 order records across 59 columns for data quality. Removed duplicates, fixed date formats, and standardized numeric fields. Created 5 engineered columns including `Delay_Days`, and saved the cleaned output as `supply_chain_ready.csv.xlsx`. Pivot table analysis revealed the core problem: **57.3% late delivery rate** — nearly 4 times the industry standard of 15%.
 ```excel
-=COUNTBLANK(A2:A180520)
+=IF(E2>0, "Late", IF(E2<0, "Early", "On-Time"))
 ```
-*(Used to audit null counts across all 59 columns)*
+*(The `Delay_Days` column — positive = late, negative = early, zero = on-time. This column drives all downstream delay analysis.)*
 
-### 🗄️ Phase 2: MySQL
-**Analytical Queries & Regional Analysis**<br>
-Imported the cleaned dataset into MySQL and wrote analytical queries using GROUP BY, HAVING, ROUND, CASE WHEN, and SUBSTRING_INDEX to analyze delays by supplier region, delivery status, product damage rates, and monthly trends. Discovered that **Central Africa** has the worst delay metrics (0.64 days avg) and **Western Europe** has the highest total cost impact ($198,912).
+### 🗄️ Phase 2: MySQL (phpMyAdmin)
+**High-Speed Bulk Ingestion & Analytical Queries**<br>
+Due to memory timeouts and packet size limits on 180,519 rows, standard UI uploads in phpMyAdmin failed. A custom optimized Python script (`00_import_to_mysql.py`) executing `LOAD DATA LOCAL INFILE` was used to successfully load the entire dataset in under 1 second. From there, 7 analytical queries were executed using aggregations and filters to quantify supply chain disruptions, rank supplier risk, and generate structured exports (`queryresults1.csv` to `queryresults7.csv`) for Power BI.
 ```sql
 SELECT 
-    SUBSTRING_INDEX(OrderRegion, ',', 1) as Supplier_Region,
-    COUNT(*) as Total_Orders,
-    ROUND(AVG(DelayDays), 2) as Avg_Delay_Days,
-    ROUND((COUNT(CASE WHEN DelayDays > 0 THEN 1 END) / COUNT(*)) * 100, 1) as Late_Delivery_Percent
+    OrderRegion,
+    Market,
+    COUNT(*) AS Order_Count,
+    AVG(DelayDays) AS Avg_Delay,
+    AVG(LossPercentage) AS Avg_Loss_Percent,
+    SUM(OrderItemTotal) AS Total_Order_Value,
+    SUM(CostImpactOfDelay) AS Cost_Impact
 FROM supply_chain_orders
-GROUP BY Supplier_Region
-HAVING Total_Orders > 100
-ORDER BY Avg_Delay_Days DESC
-LIMIT 10;
+GROUP BY OrderRegion, Market
+HAVING Avg_Delay > 0.5
+ORDER BY Avg_Delay DESC;
 ```
+*(Key Problem-Solving Insight: Initial standard query used `HAVING Avg_Delay > 3`, which returned an empty table since delays are bounded between -2 and +4 days. The threshold was adjusted to `> 0.5`, correctly capturing the top high-risk clusters led by Central Asia and Central Africa.)*
 
-### 🐍 Phase 3: Python
+### 🐍 Phase 3: Python (Google Colab)
 **Correlation Analysis & Risk Scoring Model**<br>
-Used Pandas, NumPy, Seaborn, and Matplotlib to compute a Pearson correlation matrix across 8 key numeric features and build a weighted supplier risk scoring model. Each of the 23 supplier regions gets a score from 0 to 100 based on three factors: **delay severity (40%)**, **shipping reliability (40%)**, and **product loss rate (20%)**. Central Africa scored highest at 31.66, while Canada scored lowest at 27.26.
+Using Google Colab, the `SupplyChainCleaned.csv` file was analyzed with Pandas, NumPy, Seaborn, and Matplotlib. Computed a Pearson correlation matrix across 8 key numeric features and built a weighted supplier risk scoring model. Exported the results as `Supplier_Risk_Analysis.csv` and `Market_Analysis.csv`. Each of the 23 supplier regions gets a score from 0 to 100 based on three factors: **delay severity (40%)**, **shipping reliability (40%)**, and **product loss rate (20%)**. Central Africa scored highest at 31.66, while Canada scored lowest at 27.26.
 ```python
-risk_score = (delay_score * 0.4) + (late_score * 0.4) + (loss_score * 0.2)
+total_loss = df['CostImpactOfDelay'].sum()
+total_sales = df['OrderItemTotal'].sum()
+loss_pct_of_sales = (total_loss / total_sales) * 100
+avg_loss_per_late_order = df[df['DelayDays'] > 0]['CostImpactOfDelay'].mean()
+high_risk_orders_count = len(df[df['CostImpactOfDelay'] > 10000])
 ```
+*(Produced the verified figures: $1,201,420.05 total loss, $33,054,402.38 total sales, $11.62 avg loss per late order)*
 
 ### 📈 Phase 4: Power BI
 **Interactive 3-Page Dashboard**<br>
-Built a 3-page Power BI report using DAX measures. Page 1 gives the executive team a health check using 5 KPI cards and 2 interactive charts. Page 2 visualizes the Python risk scoring model output for the procurement team as a ranked supplier risk matrix. Page 3 shows time-series financial trends and market-level loss breakdowns for the finance team.
+Built a 3-page Power BI report (`Supply_Chain_Visualization_2.pbix`) by integrating 4 distinct data sources generated from the previous phases: `SupplyChainCleaned.csv`, `Supplier_Risk_Analysis.csv`, `Market_Analysis.csv`, and `queryresults4.csv`. Page 1 gives the executive team a health check using KPI cards and 2 interactive charts. Page 2 visualizes the Python risk scoring model output for the procurement team as a ranked supplier risk matrix. Page 3 shows time-series financial trends and market-level loss breakdowns for the finance team.
 ```dax
-Late Delivery % = 
-DIVIDE(
-    CALCULATE(COUNTROWS('supply_chain_ready'), 'supply_chain_ready'[DeliveryStatus] = "Late delivery"),
-    COUNTROWS('supply_chain_ready')
-)
+OnTime Delivery % = DIVIDE(COUNTROWS(FILTER(SupplyChainCleaned, SupplyChainCleaned[Delay_Days] <= 0)), COUNTA(SupplyChainCleaned[Order Id])) * 100
 ```
+*(Core KPI measure — confirmed result: 57.3% of 180,519 orders flagged as Late delivery)*
 
 ## 💡 Strategic Recommendations
 
@@ -92,11 +97,11 @@ DIVIDE(
 ## Repository Directory Structure
 ```text
 Supply-Chain-Disruption-Analyzer/
-├── README.md                           ← Executive case study
-├── LICENSE                             ← MIT License
-├── .gitignore                          ← Ignores temp files
+├── README.md                           <-- Executive case study
+├── LICENSE                             <-- MIT License
+├── .gitignore                          <-- Ignores temp files
 │
-├── assets/                             ← Visual assets
+├── assets/                             <-- Visual assets
 │   ├── dashboards/
 │   │   ├── page1_executive_overview.png
 │   │   ├── page2_supplier_risk.png
@@ -110,37 +115,33 @@ Supply-Chain-Disruption-Analyzer/
 │
 ├── data/
 │   ├── raw/
-│   │   ├── column_descriptions.csv     ← Kaggle column metadata
-│   │   └── README.md                   ← How to get the raw data
+│   │   └── DataCoSupplyChainDataset.csv <-- Original raw dataset
 │   └── processed/
-│       ├── excel/
-│       ├── powerbi/
-│       ├── python/
-│       │   ├── market_analysis.csv         ← Python output
-│       │   └── supplier_risk_analysis.csv  ← Python risk scores
-│       └── sql/
-│           ├── 01_regional_delay_frequency.csv
-│           ├── 02_delay_by_delivery_status.csv
-│           ├── 03_product_damage_loss.csv
-│           ├── 04_monthly_trend.csv
-│           ├── 05_supplier_risk_scores_sql.csv
-│           ├── 06_market_performance.csv
-│           └── 07_region_market_breakdown.csv
+│       ├── Market_Analysis.csv         <-- Market summary (Python)
+│       ├── Supplier_Risk_Analysis.csv  <-- Supplier summary (Python)
+│       ├── SupplyChainCleaned.csv      <-- Cleaned exported dataset
+│       ├── queryresults1.csv           <-- Query output 1 (SQL)
+│       ├── queryresults2.csv           <-- Query output 2 (SQL)
+│       ├── queryresults3.csv           <-- Query output 3 (SQL)
+│       ├── queryresults4.csv           <-- Query output 4 (SQL)
+│       ├── queryresults5.csv           <-- Query output 5 (SQL)
+│       ├── queryresults6.csv           <-- Query output 6 (SQL)
+│       └── queryresults7.csv           <-- Query output 7 (SQL)
 │
 ├── excel/
-│   └── README.md                       ← Excel file too large for GitHub
+│   └── supply_chain_ready.csv.xlsx     <-- Excel workbook
 │
 ├── power_bi/
-│   └── Supply_Chain_Dashboard.pbix     ← Interactive Power BI dash
+│   └── Supply_Chain_Visualization_2.pbix <-- Interactive Power BI dash
 │
 ├── python/
-│   ├── Supply_Chain_Data_Analytics_Project.ipynb ← Full EDA & Risk Scoring
-│   └── requirements.txt               ← Python dependencies
+│   ├── Supply_chain_Data_Analytics_Project_2.ipynb <-- EDA & Risk Scoring
+│   └── requirements.txt                <-- Python dependencies
 │
 └── sql/
-    ├── 00_schema_setup.sql             ← Database & table schema
-    ├── 00_import_to_mysql.py           ← CSV-to-MySQL import script
-    └── 01_analytical_queries.sql       ← Core analytical queries
+    ├── 00_schema_setup.sql             <-- Database & table schema
+    ├── 01_analytical_queries.sql       <-- Core analytical queries
+    └── 00_import_to_mysql.py           <-- Fast LOAD DATA LOCAL INFILE script
 ```
 
 ## 👨‍💻 Author & Contact
